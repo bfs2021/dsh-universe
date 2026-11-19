@@ -53,13 +53,14 @@ window.perf = (frames, step) => {
   return { ...view.stats(), roomPaints: view.roomPaints };
 };
 window.grid = (ids, o, cols) => {
-  const cv = canvas, W = 404, H = 236;
-  cv.style.width = W * cols + 'px'; cv.style.height = H * Math.ceil(ids.length / cols) + 'px';
+  // `o.scale`: device pixels per art pixel (whole); `o.tier`: the floor size (default the building's largest).
+  const cv = canvas, k = Math.max(1, Math.round((o.scale as number) ?? 1)), W = 404 * k, H = 236 * k;
+  cv.style.width = W * cols / k + 'px'; cv.style.height = H * Math.ceil(ids.length / cols) / k + 'px';
   cv.width = W * cols; cv.height = H * Math.ceil(ids.length / cols);
   const c = cv.getContext('2d')!; kit.setLight({ dark: !!o.dark }); c.imageSmoothingEnabled = false; c.fillStyle = kit.sky(); c.fillRect(0, 0, cv.width, cv.height);
   ids.forEach((room, i) => {
-    const s = kit.room({ id: 'g' + i, room, floor: 'library', place: 'building', colour: '#6C7BEA', seed: 7, act: !!o.act, frame: o.act ? 33 : 0, reduced: false, night: !!o.dark, na: false, n: 40, recent: [{ age: 2, err: false }, { age: 9, err: true }], jobs: 1, subs: [], out: 0, queue: 0, rate: 0, hour: 15.5 })!;
-    c.drawImage(s.image, (i % cols) * W, Math.floor(i / cols) * H);
+    const s = kit.room({ id: 'g' + i, room, floor: 'library', place: 'building', colour: '#6C7BEA', seed: 7, act: !!o.act, frame: o.act ? 33 : 0, reduced: false, night: !!o.dark, na: false, n: 40, recent: [{ age: 2, err: false }, { age: 9, err: true }], jobs: 1, subs: [], out: 0, queue: 0, rate: 0, hour: 15.5, ...(o.tier ? { tier: o.tier as never } : {}) })!;
+    c.drawImage(s.image, (i % cols) * W, Math.floor(i / cols) * H, s.w * k, s.h * k);
   });
 };
 

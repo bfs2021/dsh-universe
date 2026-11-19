@@ -154,7 +154,8 @@ async function crisp(b, base) {
     const cdp = await ctx.newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: other, mobile: false });
     await page.waitForFunction((o) => globalThis.devicePixelRatio === o, other);
-    await page.waitForTimeout(300);
+    // Some headless browsers send no resize or resolution event: the once-a-second look refits it.
+    await page.waitForTimeout(1300);
     problems.push(...await check(`dpr ${dpr} → ${other}`));
     await ctx.close();
   }

@@ -7,6 +7,8 @@
 //                       (one art pixel, not the old 2-pixel grid) and it has detail; and in the real panel at dpr 1 and
 //                       2, several window sizes and after a ratio change, the room lands on whole device pixels with
 //                       smoothing off, the backing store at the screen's ratio and no blended edges
+//   --sheet <prefix>    contact sheets of every room template at 2 device pixels per art pixel (1:1 on a Retina
+//                       screen at zoom 1): <prefix>-large.png, -medium.png, -small.png
 //   --swiftshader       with --perf: no GPU at all (SwiftShader), at dpr 1 and 2; must stay under 33 ms at p95
 //   --shots <dir>       screenshots for review (--prefix, default dshu-p3-): rooms, night, narrow, the 50 rooms
 // The page is scripts/room/page.ts, built into .dev/ (ignored) and served on 127.0.0.1; nothing leaves the machine.
@@ -222,6 +224,18 @@ async function main() {
       console.log(pr.length + sc.length ? `crisp: ${pr.length + sc.length} problem(s)` : 'crisp: props at the people\'s pixel size with detail, rooms on whole device pixels without blended edges');
       failed += pr.length + sc.length;
       if (errors.length) { console.error(errors); failed++; }
+    }
+    const sheet = arg('--sheet');
+    if (sheet) {
+      const { p, errors } = await page(b, base, 2020, 2360, 2);
+      const ids = await p.evaluate(() => globalThis.ROOM_IDS);
+      for (const tier of ['large', 'medium', 'small']) {
+        await p.evaluate(([ids, tier]) => globalThis.grid(ids, { act: true, scale: 2, tier }, 5), [ids, tier]);
+        writeFileSync(`${sheet}-${tier}.png`, await (await p.$('#cv')).screenshot());
+        console.log(`sheet: ${ids.length} rooms, ${tier}`);
+      }
+      if (errors.length) { console.error(errors); failed++; }
+      await p.close();
     }
     const shots = arg('--shots');
     if (shots) {
