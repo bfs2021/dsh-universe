@@ -12,10 +12,11 @@
 // 127.0.0.1; open DSH Universe from the sidebar (city and list), then its page under Plugins (README and screenshots).
 // Fails on any console error or warning, page error, failed or non-local request, or a host log line about the plugin.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { cleanupTemp } from './official-dsh-cleanup.mjs';
 
 const { values: opt, positionals } = parseArgs({ allowPositionals: true, options: { dsh: { type: 'string', default: '0.2.2-rc.2' }, keep: { type: 'boolean' } } });
 const tgz = positionals[0] && resolve(positionals[0]);
@@ -109,9 +110,9 @@ try {
   for (const line of log.split('\n')) if (/universe|error|warn/iu.test(line) && !line.startsWith('dsh web:')) problems.push(`host log: ${line}`);
   step(`host log:\n${log.trim()}`);
 } finally {
-  server?.kill();
+  const cleaned = await cleanupTemp(server, T, { keep: opt.keep });
   if (opt.keep) step(`kept ${T} (screenshots city.png, list.png, detail.png)`);
-  else rmSync(T, { recursive: true, force: true });
+  else if (!cleaned) console.error(`[official-dsh] could not remove temp folder ${T}; leaving it in place`);
 }
 for (const p of problems) console.log(`[official-dsh] problem: ${p}`);
 console.log(problems.length ? `[official-dsh] ${problems.length} problem(s)` : `[official-dsh] ok: official DSH ${opt.dsh} only, installed from ${tgz}`);
