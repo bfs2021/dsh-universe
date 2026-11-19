@@ -8,6 +8,7 @@ import { Timeline, type TimeMode } from './Timeline.tsx';
 import { reducedMotion, unlockSound } from './time.ts';
 import { CHROME_CSS, CHROME_ROOT, btn, pressed, px } from './chrome.ts';
 import { overlayFactories, placeViewFor } from './extensions.ts';
+import { centrePick } from './centre.ts';
 import { makeKit } from './kit.ts';
 import { frameNotifier, onRatioChange, useEdgeFade } from './hooks.ts';
 import { hostDark, isNight, nextLight, type Prefs } from './prefs.ts';
@@ -16,6 +17,9 @@ import type { Translate } from './types.ts';
 import { CITY, layerSummary, placeName, rowOf } from './view.ts';
 import { tokens as fmtTokens } from './format.ts';
 
+/** True in the dev page build (scripts/dev.mjs), false in the shipped plugin (plugin/scripts/build.mjs). */
+declare const __DSHU_DEV__: boolean | undefined;
+
 /** How far the city moves at once during a replay. */
 export const REPLAY_CITY_STEP_MS = 15 * 60_000;
 
@@ -23,7 +27,8 @@ export const REPLAY_CITY_STEP_MS = 15 * 60_000;
  * Centre on this place or agent and open its card. `TOUR_BUILDING` (the tour's last step) instead opens the card of
  * the running building nearest the square among those on screen, without moving the camera.
  */
-export interface CityTarget { id: string; nonce: number }
+/** Where to send the camera; `enter`: also go inside (the list's "Go inside"). */
+export interface CityTarget { id: string; nonce: number; enter?: boolean }
 export const TOUR_BUILDING = 'tour:building';
 /** A name plate's widest (the English waiting line, `13 min · waiting for approval execute_write`). */
 const PLATE_W = 260;
@@ -186,12 +191,33 @@ export function CityPanel(p: CityProps) {
   const layersRef = useRef<HTMLDivElement>(null);
   const layersFade = useEdgeFade(layersRef);
   const [toolbarH, setToolbarH] = useState(40);
-  useLayoutEffect(() => { const h = toolbarRef.current?.getBoundingClientRect().height; if (h && Math.abs(h - toolbarH) > 1) setToolbarH(Math.round(h)); });
+  // The legend's own height (with the toolbar's 8 px gap) and natural height, and how far the panel's header reaches
+  // down over the city: where the zoom group can go (#18).
+  const legendRef = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState({ legend: 0, legendNat: 0, head: 0 });
+  useLayoutEffect(() => {
+    const h = toolbarRef.current?.getBoundingClientRect().height;
+    if (h && Math.abs(h - toolbarH) > 1) setToolbarH(Math.round(h));
+    const lg = legendRef.current, w = wrap.current;
+    const hd = w?.parentElement?.querySelector('[data-dshu-head]')?.getBoundingClientRect();
+    const next = { legend: lg ? Math.round(lg.getBoundingClientRect().height) + 8 : 0, legendNat: lg ? lg.scrollHeight + 8 : 0, head: hd && w ? Math.max(0, Math.round(hd.bottom - w.getBoundingClientRect().top)) : 0 };
+    if (Math.abs(next.legend - fit.legend) > 1 || Math.abs(next.legendNat - fit.legendNat) > 1 || next.head !== fit.head) setFit(next);
+  });
   const drag = useRef<{ x: number; y: number; moved: number; id: number } | null>(null);
   // A short window (a phone on its side, a small split): the zoom group lies down in a row above the toolbar instead of
   // standing up past the top edge (QA finding 10).
-  const zoomBtns = p.onZoomOutFar ? 5 : 4, zoomColH = zoomBtns * 38 + 6, zoomRowW = zoomBtns * 38 + 6;
-  const zoomRow = !!viewRef.current && viewRef.current.vp.h - ((p.prefs.dockMin ? 52 : 112) + toolbarH + 8) - zoomColH < 64;
+  // Small windows (#18): standing up above the toolbar when it fits under the header, else lying down there; with the
+  // legend open and no room above, beside the legend (which then scrolls inside the room left), never past the top.
+  const zoomBtns = p.onZoomOutFar ? 5 : 4, zoomColH = zoomBtns * 38 + 6, zoomRowW = zoomBtns * 38 + 6, ZOOM_ROW_H = 44;
+  const dockH = p.prefs.dockMin ? 52 : 112;
+  const room = viewRef.current ? viewRef.current.vp.h - dockH - Math.max(fit.head, 8) : Infinity;
+  const toolbarBase = toolbarH - fit.legend, toolbarNat = toolbarBase + (p.prefs.legend ? fit.legendNat : 0);
+  const legendCap = Math.max(ZOOM_ROW_H, room - toolbarBase - 16);
+  const zoomAt: 'col' | 'row' | 'besideCol' | 'besideRow' =
+    room - toolbarNat - 8 >= zoomColH + 8 ? 'col'
+      : room - toolbarNat - 8 >= ZOOM_ROW_H + 8 || !p.prefs.legend ? 'row'
+        : Math.min(legendCap, fit.legendNat - 8) >= zoomColH ? 'besideCol' : 'besideRow';
+  const zoomRow = zoomAt === 'row' || zoomAt === 'besideRow', zoomBeside = zoomAt === 'besideCol' || zoomAt === 'besideRow';
   /** What the camera was last sent to (Enter opens it; a pan by hand or key forgets it): QA finding 15. */
   const centred = useRef<string | undefined>(undefined);
   const wheel = useRef(0);
@@ -211,7 +237,8 @@ export function CityPanel(p: CityProps) {
     const offRatio = onRatioChange(fit);
     const offs = overlayFactories().map((f) => view.addOverlay(f({ t, lang })));
     view.start();
-    (globalThis as { __dshuCity?: CityView }).__dshuCity = view;
+    // The check scripts drive the dev page through this global; production bundles define __DSHU_DEV__ false and drop it.
+    if (typeof __DSHU_DEV__ !== 'undefined' && __DSHU_DEV__) (globalThis as { __dshuCity?: CityView }).__dshuCity = view;
     return () => { for (const off of offs) off(); ro?.disconnect(); offRatio(); view.stop(); notify.dispose(); viewRef.current = null; };
   }, [kit]);
 
@@ -243,6 +270,7 @@ export function CityPanel(p: CityProps) {
     go();
     const id = p.target.id;
     setSelected(id.startsWith('b:') || id.startsWith('agent:') ? id : undefined);
+    if (p.target.enter && placeViewFor(id)) { setSelected(id); setInside(id); }
     v.setFollow(id.startsWith('agent:') ? id.slice(6) : undefined);
     return () => { if (timer) clearTimeout(timer); };
   }, [p.target?.nonce]);
@@ -263,7 +291,7 @@ export function CityPanel(p: CityProps) {
   if (view?.scene && view.last) {
     const z = view.zoomValue(), W = view.vp.w, H = view.vp.h, whole = view.isWhole();
     const toolbarTop = H - (p.prefs.dockMin ? 52 : 112) - toolbarH - 4;
-    const zoomH = zoomRow ? 44 : p.onZoomOutFar ? 214 : 176;
+    const zoomH = zoomBeside ? 0 : zoomRow ? 44 : p.onZoomOutFar ? 214 : 176;
     const blocked = (x: number, y: number) => y > toolbarTop || (x > W - 60 && y > toolbarTop - zoomH + 6);
     const taken: [number, number, number, number][] = [];
     const hits = (bx: readonly number[]) => taken.some((t2) => bx[0] < t2[2] && bx[2] > t2[0] && bx[1] < t2[3] && bx[3] > t2[1]);
@@ -344,7 +372,7 @@ export function CityPanel(p: CityProps) {
   }
   void frame;
 
-  const onPointerDown = (e: RPointerEvent) => { if ((e.target as Element).closest('button')) return; drag.current = { x: e.clientX, y: e.clientY, moved: 0, id: e.pointerId }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); };
+  const onPointerDown = (e: RPointerEvent) => { if ((e.target as Element).closest('button')) return; setKbd(false); drag.current = { x: e.clientX, y: e.clientY, moved: 0, id: e.pointerId }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); };
   const local = (e: { clientX: number; clientY: number }) => { const r = wrap.current!.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
   const onPointerMove = (e: RPointerEvent) => {
     const v = viewRef.current;
@@ -387,6 +415,24 @@ export function CityPanel(p: CityProps) {
     if (wheel.current < 0) viewRef.current?.zoom(1, x, y); else zoomOut(x, y);
     wheel.current = 0;
   };
+  /**
+   * What Enter opens (#19): the thing the camera was sent to (a today button, a list row), else the place under the
+   * centre mark whose picture is centred nearest to it (not whatever sprite is on top at the exact centre).
+   */
+  const atCentre = (): string | undefined => {
+    const v = viewRef.current;
+    if (!v) return undefined;
+    const c = centred.current;
+    const id = c && c !== TOUR_BUILDING ? c : centrePick((v.last?.hits ?? []).map((h) => {
+      const a = v.screenOf(h.r[0], h.r[1]), b = v.screenOf(h.r[2], h.r[3]);
+      return { id: h.id, r: [a[0], a[1], b[0], b[1]] as const };
+    }), v.vp.w / 2, v.vp.h / 2);
+    const sid = id ? toSession(id) : undefined;
+    return sid ? 'b:' + sid : id;
+  };
+  // While the city is driven from the keyboard a mark shows its centre and the place Enter opens wears the hover ring.
+  const [kbd, setKbd] = useState(false);
+  const ringCentre = () => { setKbd(true); requestAnimationFrame(() => { if (!hover && !selected) viewRef.current?.setHover(atCentre()); }); };
   const onKey = (e: React.KeyboardEvent) => {
     const v = viewRef.current;
     if (!v || e.target !== e.currentTarget) return;
@@ -394,13 +440,13 @@ export function CityPanel(p: CityProps) {
     if (k.startsWith('Arrow') || k === '0') centred.current = undefined;
     if (k === 'ArrowLeft') v.panBy(60, 0); else if (k === 'ArrowRight') v.panBy(-60, 0); else if (k === 'ArrowUp') v.panBy(0, 60); else if (k === 'ArrowDown') v.panBy(0, -60);
     else if (k === '+' || k === '=') v.zoom(1); else if (k === '-') zoomOut(); else if (k === '0') v.home();
-    else if (k === 'Enter' || k === ' ') {   // the thing the camera went to (a today button, a list row), else the thing in the middle, opens its card
-      const c = centred.current;
-      if (c && c !== TOUR_BUILDING) { const sid = toSession(c); openCard(sid ? 'b:' + sid : c, e.currentTarget as HTMLElement); e.preventDefault(); return; }
-      const h = v.hitAt(v.vp.w / 2, v.vp.h / 2);
-      const sid = h ? toSession(h.id) : undefined;
-      if (h) openCard(sid ? 'b:' + sid : h.id, e.currentTarget as HTMLElement);
+    else if (k === 'Enter' || k === ' ') {   // the thing the camera went to, else the place at the centre mark, opens its card
+      const id = atCentre();
+      if (id) openCard(id, e.currentTarget as HTMLElement);
+      e.preventDefault();
+      return;
     } else return;
+    ringCentre();
     e.preventDefault();
   };
 
@@ -463,9 +509,17 @@ export function CityPanel(p: CityProps) {
       <style>{CHROME_CSS}</style>
       <div ref={cityEl} tabIndex={0} role="application" aria-label={t('city.aria')} onKeyDown={onKey}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; }} onPointerLeave={() => { viewRef.current?.setHover(selected); setHover(undefined); }} onWheel={onWheel}
-        onFocus={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = e.currentTarget.matches(':focus-visible') ? 'inset 0 0 0 3px #2F6BDE' : 'none'; }} onBlur={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = 'none'; }}
+        onFocus={(e) => { const kb = e.currentTarget.matches(':focus-visible'); (e.currentTarget as HTMLElement).style.boxShadow = kb ? 'inset 0 0 0 3px #2F6BDE' : 'none'; if (kb) ringCentre(); }}
+        onBlur={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = 'none'; setKbd(false); }}
         style={{ position: 'absolute', inset: 0, touchAction: 'none', cursor: hover ? 'pointer' : 'grab', outline: 'none' }}>
         <canvas ref={canvas} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', imageRendering: 'pixelated', display: 'block' }} />
+        {kbd && !inside && (
+          <svg aria-hidden="true" data-dshu-centre="" width="24" height="24" viewBox="0 0 24 24" style={{ position: 'absolute', left: '50%', top: '50%', marginLeft: -12, marginTop: -12, pointerEvents: 'none' }}
+            fill="none" strokeLinecap="square">
+            <path d="M12 1v7M12 16v7M1 12h7M16 12h7" stroke="#FFFFFF" strokeWidth="4" />
+            <path d="M12 1v7M12 16v7M1 12h7M16 12h7" stroke="#2F6BDE" strokeWidth="2" />
+          </svg>
+        )}
       </div>
       {/* Places the first-run tour points at (square, a building): empty, invisible, following the camera. */}
       {!p.prefs.toured && tourAnchors().map((a) => <span key={a.id} data-dshu-anchor={a.id} aria-hidden="true" style={{ position: 'absolute', left: a.x, top: a.y, width: a.w, height: a.h, pointerEvents: 'none' }} />)}
@@ -514,7 +568,7 @@ export function CityPanel(p: CityProps) {
         </div>
         <button ref={legendBtn} type="button" aria-expanded={p.prefs.legend} aria-pressed={p.prefs.legend} style={{ ...btn, ...px, ...(p.prefs.legend ? pressed : {}) }} onClick={() => p.setPrefs({ ...p.prefs, legend: !p.prefs.legend })}>{t('lg.title')}</button>
         {/* Under reduced motion the city is silent: the button says so instead of toggling to a sound that never plays. */}
-        <button type="button" aria-pressed={!soundOff && p.prefs.sound} aria-disabled={soundOff || undefined} aria-describedby="dshu-snd-hint" title={t(soundOff ? 'snd.rm' : 'snd.hint')}
+        <button type="button" aria-pressed={!soundOff && p.prefs.sound} aria-disabled={soundOff || undefined} aria-describedby="dshu-snd-hint" title={t(soundOff ? 'snd.rm' : p.onZoomOutFar ? 'snd.hint' : 'snd.hintOne')}
           style={{ ...btn, ...px, ...(!soundOff && p.prefs.sound ? pressed : {}), ...(soundOff ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }}
           onClick={() => { if (soundOff) return; if (!p.prefs.sound) unlockSound(); p.setPrefs({ ...p.prefs, sound: !p.prefs.sound }); }}>{t('snd.label')}</button>
         {/* Day or night: auto follows the host's theme, then day, then night; kept per device. */}
@@ -529,11 +583,12 @@ export function CityPanel(p: CityProps) {
           {t('dn.' + p.prefs.light)}
         </button>
         <span id="dshu-dn-hint" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>{t('dn.hint')}</span>
-        <span id="dshu-snd-hint" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>{t(soundOff ? 'snd.rm' : 'snd.hint')}</span>
+        <span id="dshu-snd-hint" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>{t(soundOff ? 'snd.rm' : p.onZoomOutFar ? 'snd.hint' : 'snd.hintOne')}</span>
         {p.beside && <div style={{ marginLeft: 'auto' }}>{p.beside}</div>}
         {p.prefs.legend && (
           // In a data view the legend is that layer's explanation; clear of the zoom column on a phone.
-          <div style={{ ...px, flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: '2px 14px', padding: '6px 12px', fontSize: 11.5, lineHeight: '17px', color: C.muted, maxWidth: 'min(680px, calc(100% - 56px))', boxSizing: 'border-box' }}>
+          <div ref={legendRef} data-dshu-legend="" style={{ ...px, flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: '2px 14px', padding: '6px 12px', fontSize: 11.5, lineHeight: '17px', color: C.muted, boxSizing: 'border-box',
+            maxWidth: zoomAt === 'besideRow' ? `calc(100% - ${zoomRowW + 8}px)` : 'min(680px, calc(100% - 56px))', ...(zoomBeside ? { maxHeight: legendCap, overflowY: 'auto' } : {}) }}>
             {layer !== 'all'
               ? <span style={{ color: C.text }}><b>{t(LAYER_KEY[layer])}</b> · {t('ov.' + layer, { n: CALLS_PER_CAR })}</span>
               : ['lg.1', 'lg.2', 'lg.3', 'lg.4', 'lg.5', 'lg.6'].map((k) => <span key={k}>{t(k, { n: CALLS_PER_CAR })}</span>)}
@@ -548,7 +603,7 @@ export function CityPanel(p: CityProps) {
           </div>
         )}
       </div>
-      <div role="group" aria-label={t('zm.label')} data-dshu-ctl="" style={{ ...px, position: 'absolute', right: 12, bottom: (p.prefs.dockMin ? 52 : 112) + toolbarH + 8, display: 'flex', flexDirection: zoomRow ? 'row' : 'column', padding: 2, gap: 2 }}>
+      <div role="group" aria-label={t('zm.label')} data-dshu-ctl="" data-dshu-zoom={zoomAt} style={{ ...px, position: 'absolute', right: 12, bottom: zoomBeside ? dockH : dockH + toolbarH + 8, display: 'flex', flexDirection: zoomRow ? 'row' : 'column', padding: 2, gap: 2 }}>
         {([['zm.in', () => viewRef.current?.zoom(1), 'M8 3v10M3 8h10'], ['zm.out', () => zoomOut(), 'M3 8h10'],
           ['zm.home', () => viewRef.current?.home(), 'M2.5 8.5 8 3l5.5 5.5M4.5 7v6.5h7V7'], ['zm.whole', () => viewRef.current?.whole(), 'M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10'],
           ...(p.onZoomOutFar ? [['nb.region', () => p.onZoomOutFar!(), 'M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z']] as const : [])] as const).map(([k, fn, d]) => (

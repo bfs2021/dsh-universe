@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { HistoryDay, USchedule, UInventory } from '@dsh-universe/model';
-import { clock } from './format.ts';
+import { placeViewFor } from './extensions.ts';
+import { clock, scheduleText } from './format.ts';
 import { C, S, stateColor } from './styles.ts';
 import type { PlaceRow, Row, Section } from './view.ts';
 import type { Translate } from './types.ts';
@@ -13,11 +14,15 @@ export interface ListProps {
   focus?: string;
   onOpen?(row: Row): void;
   onSeen(row: Row): void;
+  /** "Go inside": the city, inside this place (a building's id is `b:<session>`), so rooms are reachable from the list (#19). */
+  onEnter?(placeId: string): void;
 }
 
 const rowId = (id: string) => 'dshu-row-' + id;
 
-function SessionRow({ row, t, focus, onOpen, onSeen }: { row: Row; t: Translate; focus?: string; onOpen?(r: Row): void; onSeen(r: Row): void }) {
+
+function SessionRow({ row, t, focus, onOpen, onSeen, onEnter }: { row: Row; t: Translate; focus?: string; onOpen?(r: Row): void; onSeen(r: Row): void; onEnter?(id: string): void }) {
+  const inside = onEnter && !row.sub && placeViewFor('b:' + row.sessionId) ? 'b:' + row.sessionId : undefined;
   return (
     <div id={rowId(row.id)} role="listitem" className="dshu-srow" style={{ ...S.row, ...(focus === row.id ? { outline: `2px solid ${C.wait}`, outlineOffset: -2 } : {}) }}>
       <span style={{ fontSize: 12, fontWeight: 600, color: stateColor(row.state) }}>{row.stateText}</span>
@@ -28,6 +33,7 @@ function SessionRow({ row, t, focus, onOpen, onSeen }: { row: Row; t: Translate;
       <span className="dshu-acts" style={S.acts}>
         {onOpen && <button type="button" style={S.rowBtn} onClick={() => onOpen(row)}>{row.waiting ? t('act.confirm') : t('act.open')}</button>}
         {row.review && <button type="button" style={S.rowBtn} onClick={() => onSeen(row)}>{t('act.seen')}</button>}
+        {inside && <button type="button" style={S.rowBtn} onClick={() => onEnter!(inside)}>{t('act.enter')}</button>}
       </span>
       <span style={S.nums}>{row.tokens}<br />{row.duration}</span>
     </div>
@@ -49,7 +55,7 @@ export function ListView(p: ListProps) {
   const [first, ...rest] = p.sections;
   const group = (s: Section) => (
     <Group key={s.id} title={s.title} count={s.rows.length}>
-      {s.rows.length ? s.rows.map((r) => <SessionRow key={r.id} row={r} t={p.t} focus={p.focus} onOpen={p.onOpen} onSeen={p.onSeen} />) : none}
+      {s.rows.length ? s.rows.map((r) => <SessionRow key={r.id} row={r} t={p.t} focus={p.focus} onOpen={p.onOpen} onSeen={p.onSeen} onEnter={p.onEnter} />) : none}
     </Group>
   );
   return (
@@ -60,7 +66,7 @@ export function ListView(p: ListProps) {
         <Group title={p.t('li.auto')} count={p.schedules.length}>
           {p.schedules.length ? p.schedules.map((s) => {
             const ran = s.runs.filter((r) => r.at <= p.T).sort((a, b) => b.at - a.at)[0];
-            const text = s.status === 'paused' ? p.t('sch.paused') : s.nextAt !== undefined && s.nextAt > p.T ? p.t('sch.next', { t: clock(s.nextAt, p.lang) }) : '';
+            const text = scheduleText(s, ran, p.T, p.t, p.lang);
             return (
               <div key={s.id} id={rowId('sch:' + s.id)} role="listitem" style={{ ...S.row, ...(p.focus === 'sch:' + s.id ? { outline: `2px solid ${C.wait}`, outlineOffset: -2 } : {}) }}>
                 <span style={{ fontSize: 12, color: C.muted }}>{ran ? clock(ran.at, p.lang) : ''}</span>
@@ -77,7 +83,9 @@ export function ListView(p: ListProps) {
           <div key={pl.id} id={rowId(pl.id)} role="listitem" style={{ ...S.row, ...(p.focus === pl.id ? { outline: `2px solid ${C.wait}`, outlineOffset: -2 } : {}) }}>
             <span style={{ fontSize: 12, color: C.muted }}>{p.t('pl.in', { n: pl.inside })}</span>
             <span style={{ minWidth: 0 }}><div style={S.title}>{pl.name}</div><div style={S.small}>{pl.floors}</div></span>
-            <span />
+            {p.onEnter && placeViewFor(pl.id)
+              ? <span className="dshu-acts" style={S.acts}><button type="button" style={S.rowBtn} onClick={() => p.onEnter!(pl.id)}>{p.t('act.enter')}</button></span>
+              : <span />}
           </div>
         ))}
       </Group>
