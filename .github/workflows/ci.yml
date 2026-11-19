@@ -1,0 +1,37 @@
+# PR gate: typecheck, build, tests, locale checks. A private copy may use a self-hosted runner; a public repository
+# always uses GitHub-hosted runners, so pull requests from forks never reach a self-hosted machine.
+name: ci
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+permissions:
+  contents: read
+concurrency: { group: "ci-${{ github.event.pull_request.number || github.ref }}", cancel-in-progress: true }
+jobs:
+  check:
+    runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - run: npm ci --no-audit --no-fund
+      - name: typecheck
+        run: npm run typecheck
+      - name: build
+        run: npm run build
+      - name: test
+        run: npm test
+      - name: locale tables
+        run: npm run check-locales
+      - name: no inline interface text
+        run: npm run check-no-inline-text
+      # The public npm tarball: only the minified bundle, READMEs, screenshots and LICENSE (scripts/check-tarball.mjs).
+      - name: npm tarball audit
+        run: npm run check-tarball
+      # The browser checks need a Chromium; the runner may have none, so a skip is accepted here (and only here).
+      - name: city goldens and layer leaks
+        run: node scripts/city-check.mjs --golden --allow-skip

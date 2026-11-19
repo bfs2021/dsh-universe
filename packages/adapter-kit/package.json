@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-universe/adapter-kit",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "description": "Adapter interface, privacy conformance checks and fixture format.",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } },
+  "dependencies": { "@dsh-universe/model": "*" }
+}

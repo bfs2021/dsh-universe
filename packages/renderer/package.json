@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-universe/renderer",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "description": "Scenes, camera and hit testing. Draws through an ArtKit; ships a flat-box stub kit.",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } },
+  "dependencies": { "@dsh-universe/model": "*" }
+}

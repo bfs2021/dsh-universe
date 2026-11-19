@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-universe/art",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "description": "The DSH Universe art: palette, sprites, building, room and street templates, props. All rights reserved.",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } },
+  "dependencies": { "@dsh-universe/model": "*", "@dsh-universe/renderer": "*" }
+}

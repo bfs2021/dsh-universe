@@ -1,0 +1,47 @@
+# Release: after every merge to dev, cut a release into the capabilities catalog when the shipped bundle changed
+# (scripts/release.mjs). Needs the repository secret CAPABILITIES_TOKEN; without it the job does nothing, and a
+# release is cut by hand: `node scripts/release.mjs --capabilities <catalog checkout> --pr --merge`.
+name: release
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency: { group: release, cancel-in-progress: false }
+jobs:
+  release:
+    # Self-hosted only while the repository is private; GitHub-hosted once it is public (see ci.yml).
+    runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.CAPABILITIES_TOKEN }}
+    steps:
+      - name: no token, no release
+        if: env.GH_TOKEN == ''
+        run: echo "::notice::CAPABILITIES_TOKEN is not set; cut releases with npm run release"
+      - uses: actions/checkout@v4
+        if: env.GH_TOKEN != ''
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        if: env.GH_TOKEN != ''
+        with: { node-version-file: .nvmrc }
+      - if: env.GH_TOKEN != ''
+        run: npm ci --no-audit --no-fund
+      - name: check
+        if: env.GH_TOKEN != ''
+        run: npm run check
+      - name: checkout capabilities catalog
+        if: env.GH_TOKEN != ''
+        uses: actions/checkout@v4
+        with: { repository: khglobal/astero-capabilities, ref: dev, path: .capabilities, token: '${{ secrets.CAPABILITIES_TOKEN }}', persist-credentials: true }
+      - name: cut release
+        if: env.GH_TOKEN != ''
+        run: |
+          set -euo pipefail
+          corepack enable
+          git -C .capabilities config user.name "dsh-universe release"
+          git -C .capabilities config user.email "dsh-universe-release@users.noreply.github.com"
+          node scripts/release.mjs --skip-build --capabilities .capabilities --pr --merge
+      - if: always() && env.GH_TOKEN != ''
+        run: rm -rf .capabilities plugin/dist

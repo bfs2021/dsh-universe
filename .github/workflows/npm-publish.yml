@@ -1,0 +1,107 @@
+# Publishes a member release to the public npm registry as @khglobal/dsh-universe. Manual only: Actions → npm-publish →
+# Run workflow, with the version to publish.
+#
+# One source of truth for versions: the capabilities catalog. The version must be a release already merged
+# there (scripts/release.mjs cuts those); the tarball carries that release's bundle bytes, checked against its
+# SHA256SUMS, plus the public READMEs, screenshots and LICENSE from this branch (scripts/npm-pack.mjs). It is audited
+# (scripts/check-tarball.mjs) before anything is published.
+#
+# Secrets (the owner sets both; until then the job only prints a notice and does nothing):
+# - NPM_TOKEN: a granular npm access token with read and write on the @khglobal scope (packages and scopes), and
+#   "bypass 2FA" allowed for automation.
+# - CAPABILITIES_TOKEN: read access to the capabilities catalog repository.
+#
+# Provenance (`--provenance`) needs a public source repository and a GitHub-hosted runner. While this repository is
+# private the job runs on a self-hosted runner and publishes without provenance (with a notice); once it is public, it
+# moves to a GitHub-hosted runner and publishes with provenance.
+name: npm-publish
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (an existing catalog release, for example 0.1.4)
+        required: true
+        type: string
+      dry_run:
+        description: Pack and audit only; do not publish
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  id-token: write
+concurrency: { group: npm-publish, cancel-in-progress: false }
+jobs:
+  publish:
+    runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      CAPABILITIES_TOKEN: ${{ secrets.CAPABILITIES_TOKEN }}
+      VERSION: ${{ inputs.version }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      PROVENANCE: ${{ !github.event.repository.private }}
+    steps:
+      - name: secrets
+        id: gate
+        run: |
+          if [ -z "$NPM_TOKEN" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::notice::NPM_TOKEN is not set; nothing was published. Add the secret, then run this workflow again."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$CAPABILITIES_TOKEN" ]; then
+            echo "::notice::CAPABILITIES_TOKEN is not set; the release cannot be read from the capabilities catalog. Nothing was published."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be x.y.z (a catalog release), got '$VERSION'"
+            exit 1
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == 'true'
+        with: { node-version-file: .nvmrc }
+      - if: steps.gate.outputs.go == 'true'
+        run: npm ci --no-audit --no-fund
+      - name: checks
+        if: steps.gate.outputs.go == 'true'
+        run: npm run check
+      - name: capabilities history
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with: { repository: khglobal/astero-capabilities, ref: dev, path: .capabilities, fetch-depth: 0, token: '${{ secrets.CAPABILITIES_TOKEN }}', persist-credentials: false }
+      - name: not on npm yet
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          if npm view "@khglobal/dsh-universe@$VERSION" version --registry https://registry.npmjs.org/ --@khglobal:registry=https://registry.npmjs.org/ 2>/dev/null | grep -q .; then
+            echo "::error::@khglobal/dsh-universe@$VERSION is already on npm"; exit 1
+          fi
+      - name: pack
+        id: pack
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          out=$(node scripts/npm-pack.mjs --version "$VERSION" --capabilities .capabilities --out .tmp/npm-publish | tail -n 1)
+          echo "$out"
+          echo "tarball=$(node -e 'console.log(JSON.parse(process.argv[1]).tarball)' "$out")" >> "$GITHUB_OUTPUT"
+      - name: audit
+        if: steps.gate.outputs.go == 'true'
+        run: node scripts/check-tarball.mjs "${{ steps.pack.outputs.tarball }}"
+      - name: publish
+        if: steps.gate.outputs.go == 'true' && env.DRY_RUN != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          npmrc="$RUNNER_TEMP/npmrc-publish"
+          printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$npmrc"
+          # The runner may map @khglobal to the company npm source; this publish always goes to npmjs.
+          flags=(--access public --registry https://registry.npmjs.org/ --@khglobal:registry=https://registry.npmjs.org/ --userconfig "$npmrc")
+          if [ "$PROVENANCE" = "true" ]; then flags+=(--provenance); else echo "::notice::private repository: published without provenance"; fi
+          npm publish "${{ steps.pack.outputs.tarball }}" "${flags[@]}"
+          rm -f "$npmrc"
+          echo "::notice::published @khglobal/dsh-universe@$VERSION to npmjs"
+      - if: always()
+        run: rm -rf .capabilities .tmp/npm-publish "$RUNNER_TEMP/npmrc-publish"
