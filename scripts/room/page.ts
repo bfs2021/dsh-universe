@@ -62,4 +62,54 @@ window.grid = (ids, o, cols) => {
     c.drawImage(s.image, (i % cols) * W, Math.floor(i / cols) * H);
   });
 };
+
+/**
+ * Pixel size and detail of a picture (RGBA, w×h; transparent pixels are outside it). `fine`: of the aligned 2×2 blocks
+ * that touch the picture, the share that is not one colour, at the best of the four grid phases (0 for art drawn on a
+ * 2-pixel grid, well above 0 for art at one art pixel). `edges`: colour changes between neighbours inside the picture
+ * per opaque pixel. `colours`: distinct opaque colours.
+ */
+function density(d: Uint8ClampedArray, w: number, h: number): { n: number; fine: number; edges: number; colours: number } {
+  const u = new Uint32Array(d.buffer, d.byteOffset, w * h), at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : d[(y * w + x) * 4 + 3] ? u[y * w + x] : 0);
+  let n = 0, edges = 0;
+  const colours = new Set<number>();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = at(x, y);
+    if (!v) continue;
+    n++; colours.add(v);
+    const r = at(x + 1, y), b = at(x, y + 1);
+    if (r && r !== v) edges++;
+    if (b && b !== v) edges++;
+  }
+  let fine = 1;
+  for (const [px, py] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+    let blocks = 0, mixed = 0;
+    for (let y = py - 1; y < h; y += 2) for (let x = px - 1; x < w; x += 2) {
+      const q = [at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)];
+      if (!q.some(Boolean)) continue;
+      blocks++;
+      if (q.some((v) => v !== q[0])) mixed++;
+    }
+    if (blocks) fine = Math.min(fine, mixed / blocks);
+  }
+  return { n, fine, edges: n ? edges / n : 0, colours: colours.size };
+}
+declare global { interface Window { density(o: Record<string, unknown>): unknown } }
+/**
+ * The props of a room (as show() opens it), each measured as the room cache laid it down, and the people as the view
+ * draws them: the check holds the props to the people's pixel size and to a minimum of detail.
+ */
+window.density = (o) => {
+  kit.roomCache.clear();
+  const items: { tag: string; outlined: boolean; x: number; y: number; w: number; h: number; data: Uint8ClampedArray }[] = [];
+  kit.roomCache.trace = items;
+  try { window.show({ ...o, reduced: true }); } finally { kit.roomCache.trace = null; }
+  const props = items.map((it) => ({ tag: it.tag, outlined: it.outlined, ...density(it.data, it.w, it.h) }));
+  const people = [3, 17, 42, 77].map((seed) => {
+    const cv = new OffscreenCanvas(40, 48), g = cv.getContext('2d')!;
+    kit.person((x, y, w, h, c) => { g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }, 20, 40, { seed, state: 'running', subagent: false, ring: false, phase: 0, walking: false, working: false, placard: 0, tier: 0 });
+    return density(g.getImageData(0, 0, 40, 48).data, 40, 48);
+  });
+  return { props, people };
+};
 void FLOOR_KINDS;

@@ -28,6 +28,9 @@ export function snapTo(data: Uint8ClampedArray, inks: readonly string[]): void {
 import { AS, defaultSurface, type Sprite, type Surface, type SurfaceFactory } from './sprites.ts';
 import type { Canvas2D } from '@dsh-universe/renderer';
 
+/** An item as the room cache laid it down (see RoomCache.trace). */
+export interface TracedItem { tag: string; outlined: boolean; x: number; y: number; w: number; h: number; data: Uint8ClampedArray }
+
 interface Slot { surface: Surface; key: string; sprite: Sprite }
 
 /** Bounds of what is drawn through a context, in canvas pixels (the room transform is a fixed scale and offset). */
@@ -79,6 +82,12 @@ export class RoomCache {
   private readonly make: SurfaceFactory;
   private scratch: Surface | undefined;
   draws = 0;
+  /**
+   * When set (checks only): every item composed into the next rooms, as laid down (snapped and outlined, before it is
+   * drawn over the room), with its tag and place in the sprite. scripts/room-check.mjs `--crisp` measures the props'
+   * pixel size and detail from it.
+   */
+  trace: TracedItem[] | null = null;
   /** Props composed (each snapped and outlined on its own). */
   items = 0;
   constructor(make: SurfaceFactory = defaultSurface) { this.make = make; }
@@ -116,6 +125,7 @@ export class RoomCache {
       const im = S.getImageData(x0, y0, x1 - x0, y1 - y0);
       quantize(im.data);
       if (outlined) outline(im.data, x1 - x0, y1 - y0, night);
+      this.trace?.push({ tag, outlined, x: x0, y: y0, w: x1 - x0, h: y1 - y0, data: new Uint8ClampedArray(im.data) });
       S.putImageData(im, x0, y0);
       D.drawImage(S.canvas as CanvasImageSource, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
       S.clearRect(x0, y0, x1 - x0, y1 - y0);
@@ -157,6 +167,7 @@ export class RoomCache {
       }
       if (outlined) outline(new Uint8ClampedArray(half.buffer), hw, hh, night);
       for (let by = 0; by < hh; by++) for (let bx = 0; bx < hw; bx++) { const v = half[by * hw + bx], i = by * 2 * fw + bx * 2; d[i] = d[i + 1] = d[i + fw] = d[i + fw + 1] = v; }
+      this.trace?.push({ tag, outlined, x: x0, y: y0, w: fw, h: fh, data: new Uint8ClampedArray(im.data) });
       S.putImageData(im, x0, y0);
       D.drawImage(S.canvas as CanvasImageSource, x0, y0, fw, fh, x0, y0, fw, fh);
       S.clearRect(x0, y0, fw, fh);
@@ -166,7 +177,8 @@ export class RoomCache {
     S.setTransform(AS, 0, 0, AS, ox, oy);
     let coarse = false;
     let detail = false;
-    setItemHook((t, ol) => { flush(); outlined = ol; coarse = COARSE.test(t); detail = t === 'walld'; });
+    let tag = '';
+    setItemHook((t, ol) => { flush(); tag = t; outlined = ol; coarse = COARSE.test(t); detail = t === 'walld'; });
     try { withPen(tracking(S, b), paint); flush(); } finally { setItemHook(null); S.setTransform(1, 0, 0, 1, 0, 0); }
     // A last pass over the finished room (an unavailable floor goes through the grey ramp).
     if (finish) { const im = D.getImageData(0, 0, w, h); finish(im.data); D.putImageData(im, 0, 0); }
