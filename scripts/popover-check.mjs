@@ -109,9 +109,9 @@ try {
       await expect(true, 'opened from the notice');
       await page.keyboard.press('Escape');
       await expect(false, 'Esc after opening from the notice');
-      await page.locator('[data-dshu-chip="claude-code"]').click();
+      await page.locator('[data-dshu-chip="claude"]').click();
       await page.waitForTimeout(4000);
-      if (!(await page.locator('[data-dshu-sign="claude-code"]').count())) problems.push(`${lang}: not in the Claude Code city`);
+      if (!(await page.locator('[data-dshu-sign="claude"]').count())) problems.push(`${lang}: not in the Claude city`);
 
       for (const width of [1400, 640]) {
         step(`${lang}: Claude Code city at ${width} px`);
@@ -130,7 +130,7 @@ try {
         await box.uncheck(); await expect(true, 'a checkbox unticked');
         await box.check(); await expect(true, 'a checkbox ticked');
         // A click elsewhere: the city sign beside the button, which is what sits above the popover.
-        await page.locator('[data-dshu-sign="claude-code"]').click(); await expect(false, 'a click on the city sign');
+        await page.locator('[data-dshu-sign="claude"]').click(); await expect(false, 'a click on the city sign');
         await btn.click(); await expect(true, 'reopened');
         await page.mouse.click(width / 2, 600); await expect(false, 'a click on the city');
         // Esc, with focus back on the button.

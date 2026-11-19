@@ -1,5 +1,5 @@
 // The cities around: what the member sees when zooming out past the widest view of a city, once at least one
-// adjacent city (Claude Code, Codex on this device) is turned on. Each city is a card with a clear sign, a still
+// adjacent city (Claude, ChatGPT, WorkBuddy on this device) is turned on. Each city is a card with a clear sign, a still
 // picture of the whole city and today's numbers; choosing one goes into it. The DSH city is always first.
 import { useEffect, useMemo, useRef } from 'react';
 import { emptyPlacement, todayAt } from '@dsh-universe/model';
@@ -15,11 +15,13 @@ import { CITY } from './view.ts';
 
 export type CityId = 'dsh' | NeighbourId;
 /** The sign colour of each city (a band on its card; the name is always written beside it). */
-export const SIGN: Record<CityId, string> = { dsh: '#2F6BDE', 'claude-code': '#C8643C', codex: '#14A8A4' };
+export const SIGN: Record<CityId, string> = { dsh: '#2F6BDE', claude: '#C8643C', chatgpt: '#14A8A4', workbuddy: '#8E5BE8' };
 
-export function Region({ cities, active, t, lang, now, dark, onEnter, onClose }: {
+export function Region({ cities, active, t, lang, now, dark, onEnter, onClose, onFocusCity }: {
   cities: { id: CityId; feed: Feed }[]; active: CityId; t: Translate; lang: string; now: number; dark: boolean;
   onEnter(id: CityId): void; onClose(): void;
+  /** The card pointed at or focused (its city's sound is brought forward); undefined when none. */
+  onFocusCity?(id: CityId | undefined): void;
 }) {
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => { first.current?.focus(); }, []);
@@ -32,7 +34,7 @@ export function Region({ cities, active, t, lang, now, dark, onEnter, onClose }:
       <p style={{ ...S.note, margin: '0 0 12px' }}>{t('nb.regionHead')}</p>
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 16 }}>
         {cities.map((c, i) => (
-          <li key={c.id}><Card id={c.id} feed={c.feed} here={c.id === active} t={t} lang={lang} now={now} dark={dark} onEnter={onEnter} btnRef={i === 0 ? first : undefined} /></li>
+          <li key={c.id} onPointerEnter={() => onFocusCity?.(c.id)} onPointerLeave={() => onFocusCity?.(undefined)} onFocus={() => onFocusCity?.(c.id)} onBlur={() => onFocusCity?.(undefined)}><Card id={c.id} feed={c.feed} here={c.id === active} t={t} lang={lang} now={now} dark={dark} onEnter={onEnter} btnRef={i === 0 ? first : undefined} /></li>
         ))}
       </ul>
     </div>
