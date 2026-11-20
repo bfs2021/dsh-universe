@@ -88,7 +88,8 @@ export function placeName(id: string, t: Translate, store: Store): string {
 const floorName = (id: string, t: Translate) => {
   const k = 'fl.' + id;
   const v = t(k);
-  return v === k ? id : v;
+  // A tool's floor: its name without the `mcp__server__` prefix, as everywhere else.
+  return v === k ? shortTool(id) : v;
 };
 
 export function titleOf(s: AgentTrack, store: Store, titles: Record<string, string>, t: Translate): string {
@@ -162,9 +163,9 @@ function lastActivity(s: AgentTrack, T: number): number {
 
 export interface Section { id: ListGroupId; title: string; rows: Row[] }
 
-export function sections(store: Store, T: number, t: Translate, lang: string, titles: Record<string, string>, seen?: Seen, drafts?: Drafts): Section[] {
+export function sections(store: Store, T: number, t: Translate, lang: string, titles: Record<string, string>, seen?: Seen, drafts?: Drafts, from?: number): Section[] {
   const key: Record<ListGroupId, string> = { need: 'li.need', review: 'li.review', running: 'li.running', failed: 'li.failed', idle: 'li.idle', done: 'li.done' };
-  return listGroups(store, T, CITY, seen, drafts).map((g) => ({ id: g.id, title: t(key[g.id]), rows: g.rows.map((s) => rowOf(s, store, T, t, lang, titles, g.id === 'review', drafts)) }));
+  return listGroups(store, T, CITY, seen, drafts, from).map((g) => ({ id: g.id, title: t(key[g.id]), rows: g.rows.map((s) => rowOf(s, store, T, t, lang, titles, g.id === 'review', drafts)) }));
 }
 
 export interface PlaceRow { id: string; name: string; floors: string; inside: number }

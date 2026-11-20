@@ -3,10 +3,13 @@
 // with the neighbouring cities' "+n local" figures (dev page ?local=1, sample day): every button whole inside the
 // window and inside the bar (nothing cut, nothing behind a scroller only a trackpad reaches), every figure's text
 // whole (the next scheduled task's title alone may end in an ellipsis; its full text is the button's name), and no
-// button under the city / list switch or the neighbouring cities' controls.
+// button under the city / list switch or the neighbouring cities' controls; no item wider than its buttons (#25); the
+// "+n local" breakdown by city shows on keyboard focus and hides on Esc (#23).
 // The nearby cities' settings: the click on the city that closes it does not also enter the building under it (5).
 // Focus (8): inside a room the city's covered controls are out of the Tab order, Esc gives focus back to the city,
 // and the notice's "Nearby cities" puts focus into the settings. The tour's building card closes with the tour (9).
+// Keyboard (#19): Enter opens the centred place, a centre mark, focus back on the city after the tour, the list's
+// "Go inside".
 // Sound (12): a key press makes the audio context like a click; under reduced motion the button says it is unavailable.
 //   --shots <dir>   save a screenshot of each case
 //   --allow-skip    no Chromium: skip (and pass)
@@ -42,8 +45,31 @@ async function check(b, base, w, lang, shots) {
       if (el.scrollWidth > el.clientWidth + 1 && !(sched && el.getAttribute('aria-label'))) out.push(`"${name}" text cut (${el.scrollWidth} > ${el.clientWidth})`);
       for (const o of others) if (q.left < o.right - 1 && q.right > o.left + 1 && q.top < o.bottom - 1 && q.bottom > o.top + 1) out.push(`"${name}" under another control`);
     }
+    // Each item is as wide as what it holds (#25: the scheduled task's item kept its whole title's width).
+    for (const li of ul.querySelectorAll(':scope > li')) {
+      if (getComputedStyle(li).position === 'absolute') continue;
+      const kids = [...li.children].filter((x) => x.getClientRects().length);
+      const used = kids.reduce((a, x) => a + x.getBoundingClientRect().width, 0) + Math.max(0, kids.length - 1) * (parseFloat(getComputedStyle(li).columnGap) || 0);
+      const extra = li.getBoundingClientRect().width - used;
+      if (extra > 2) out.push(`an item is ${Math.round(extra)} px wider than its buttons`);
+    }
     return { out, n: btns.length, local: ul.querySelectorAll('button[data-dshu-local]').length, h: Math.round(ur.height) };
   });
+  // The "+n local" breakdown by city shows under the bar on keyboard focus (#23: it was a mouse-only title), inside
+  // the window, and Esc hides it.
+  const fig = page.locator('[data-dshu-today] button[data-dshu-local]').first();
+  if (await fig.count()) {
+    await page.locator('[data-dshu-today] button').first().focus();
+    for (let i = 0; i < 8 && !(await fig.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press('Tab');
+    const tip = page.locator('[data-dshu-by-text]');
+    const box = await tip.boundingBox().catch(() => null);
+    if (!box || !(await tip.textContent())?.trim()) r.out.push('the "+n local" breakdown did not show on keyboard focus');
+    else if (box.x < -0.5 || box.x + box.width > w + 0.5) r.out.push('the "+n local" breakdown leaves the window');
+    const describe = await fig.evaluate((el) => document.getElementById(el.getAttribute('aria-describedby') ?? '')?.textContent ?? '');
+    if (!describe.trim()) r.out.push('the "+n local" figure is not described by its breakdown');
+    await page.keyboard.press('Escape');
+    if (await tip.count()) r.out.push('Esc did not hide the "+n local" breakdown');
+  }
   if (r.n < 6) r.out.push(`${r.n} buttons, expected 6`);
   if (!r.local) r.out.push('no "+n local" figure shown');
   if (shots) await page.screenshot({ path: join(shots, `todaybar-${lang}-${w}.png`), clip: { x: 0, y: 0, width: w, height: Math.min(260, w < 600 ? 300 : 200) } });
@@ -80,7 +106,7 @@ async function open(b, base, qs, prefs, o = {}) {
   await page.addInitScript(([k, v]) => { try { localStorage.setItem(k, v); } catch { /* storage off */ } }, [PREFS, JSON.stringify(prefs)]);
   if (o.audio) await page.addInitScript(() => { const A = globalThis.AudioContext; globalThis.__made = 0; globalThis.AudioContext = class extends A { constructor(...a) { super(...a); globalThis.__made++; } }; });
   await page.goto(base + 'index.html?panel=1&fixed=1&' + qs);
-  await page.waitForFunction(() => !!globalThis.__dshuCity?.last);
+  if (o.list) await page.waitForSelector('[role="list"]'); else await page.waitForFunction(() => !!globalThis.__dshuCity?.last);
   return page;
 }
 async function enterRunning(page) {
@@ -133,6 +159,63 @@ async function focusChecks(b, base, lang) {
   return out;
 }
 
+// Keyboard (#19): a place centred by the camera opens with Enter (not a tower in front of it), a mark shows the
+// centre, the tour's end gives focus back to the city, and the list's "Go inside" enters a place.
+async function keyboardChecks(b, base, lang) {
+  const out = [];
+  let page = await open(b, base, 'lang=' + lang, { toured: true });
+  const ids = await page.evaluate(() => [...new Set(globalThis.__dshuCity.last.hits.map((h) => h.id).filter((id) => !id.startsWith('agent:') && !id.startsWith('b:')))]);
+  if (ids.length < 3) out.push(`only ${ids.length} public places on screen`);
+  for (const id of ids) {
+    await page.keyboard.press('Escape');
+    await page.evaluate((id) => globalThis.__dshuCity.centreOn(id), id);
+    await page.waitForTimeout(700);
+    // Moved there with the keys: the ring marks what Enter opens, and Enter opens just that. A public building
+    // centred on the mark is the one marked (Agent Academy and Error Recovery opened a tower in front of them);
+    // a small shop may share the middle with a tower, and then the mark decides.
+    await page.locator('[role="application"]').focus();
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(150);
+    const ringed = await page.evaluate(() => globalThis.__dshuCity.hover);
+    if (!id.includes(':') && ringed !== id) out.push(`the centred ${id} is not the one marked (${ringed})`);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(150);
+    const got = await page.evaluate(() => globalThis.__dshuCity.hover);
+    if (got !== ringed || !(await page.locator('[data-dshu-card]').count())) out.push(`Enter with ${ringed} marked opened ${got}`);
+  }
+  // Sent there by a today button (the next scheduled task: the station): Enter opens that place.
+  await page.keyboard.press('Escape');
+  await page.locator('[data-dshu-today] button[data-dshu-sched]').click();
+  await page.waitForTimeout(900);
+  await page.locator('[role="application"]').focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+  const sent = await page.evaluate(() => globalThis.__dshuCity.hover);
+  if (sent !== 'station') out.push(`Enter after the camera went to the station opened ${sent}`);
+  await page.keyboard.press('Escape');
+  await page.locator('[role="application"]').focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(100);
+  if (!(await page.locator('[data-dshu-centre]').count())) out.push('no centre mark while moving the city with the keyboard');
+  await page.close();
+  // The tour ended from the keyboard: focus on the city, not on the page's body.
+  page = await open(b, base, 'lang=' + lang, {});
+  for (let i = 0; i < 8 && (await page.locator('[data-dshu-tour]').count()); i++) { await page.keyboard.press('Enter'); await page.waitForTimeout(500); }
+  const where = await page.evaluate(() => document.activeElement?.getAttribute('role') ?? document.activeElement?.tagName);
+  if (where !== 'application') out.push(`after the tour focus is on ${where}`);
+  await page.close();
+  // The list's "Go inside" opens the place in the city.
+  page = await open(b, base, 'lang=' + lang, { toured: true, view: 'list' }, { list: true });
+  const inside = page.getByRole('button', { name: lang === 'en' ? 'Go inside' : '进楼看看' });
+  if (!(await inside.count())) out.push('the list has no "Go inside"');
+  else {
+    await inside.last().click();
+    await page.waitForFunction(() => !!globalThis.__dshuRoom?.geometry?.w, null, { timeout: 5000 }).catch(() => out.push('"Go inside" in the list did not open the place'));
+  }
+  await page.close();
+  return out;
+}
+
 async function soundChecks(b, base, lang) {
   const out = [];
   let page = await open(b, base, 'lang=' + lang, { toured: true, sound: true }, { audio: true });
@@ -167,6 +250,9 @@ async function main() {
       const f = await focusChecks(b, base, lang);
       console.log(`focus: ${lang}: ${f.length ? 'FAIL ' + f.join('; ') : 'room covers the city controls; Esc back to the city; notice into the settings; tour card closes'}`);
       failed += f.length ? 1 : 0;
+      const kb = await keyboardChecks(b, base, lang);
+      console.log(`keyboard: ${lang}: ${kb.length ? 'FAIL ' + kb.join('; ') : 'Enter opens the centred place; centre mark; focus after the tour; list "Go inside"'}`);
+      failed += kb.length ? 1 : 0;
       const sn = await soundChecks(b, base, lang);
       console.log(`sound: ${lang}: ${sn.length ? 'FAIL ' + sn.join('; ') : 'a key starts it; unavailable under reduced motion'}`);
       failed += sn.length ? 1 : 0;

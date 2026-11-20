@@ -16,6 +16,9 @@ import { placeName, rowOf } from './view.ts';
 const PROP_CARD_OUTER = 248 + 24 + 4, AGENT_CARD_OUTER = 236 + 24 + 4;
 import { floorLabel, floorValue, propLines, roomSummary, type PropId } from './interior-text.ts';
 
+/** True in the dev page build (scripts/dev.mjs), false in the shipped plugin (plugin/scripts/build.mjs). */
+declare const __DSHU_DEV__: boolean | undefined;
+
 /** What the host provides when the panel does not say (everything; a missing source then shows zeros, not "—"). */
 const ALL_CAPS: UCapabilities = {
   approvals: true, schedules: true, subagents: true, jobs: true, deliverables: true, skills: true, memory: false, tokens: true, cost: false, latency: true,
@@ -88,7 +91,8 @@ export function InteriorView(p: InteriorProps & { caps?: UCapabilities }) {
     ro?.observe(el);
     const offRatio = onRatioChange(fit);
     view.start();
-    (globalThis as { __dshuRoom?: RoomView }).__dshuRoom = view;
+    // The check scripts drive the dev page through this global; production bundles define __DSHU_DEV__ false and drop it.
+    if (typeof __DSHU_DEV__ !== 'undefined' && __DSHU_DEV__) (globalThis as { __dshuRoom?: RoomView }).__dshuRoom = view;
     return () => { ro?.disconnect(); offRatio(); view.stop(); notify.dispose(); viewRef.current = null; };
   }, [kit]);
 
@@ -184,11 +188,14 @@ export function InteriorView(p: InteriorProps & { caps?: UCapabilities }) {
 
   const wide = geo?.wide ?? true;
   const phone = vw < 480;
+  // A floor's tooltip follows a mouse pointer or keyboard focus only: a tap focuses the button too, and the tooltip
+  // then stayed open over the room after the floor was chosen (#18, covering "On this floor now" at 320 px).
   const floorBtn = (f: InteriorFloor, i: number, style: CSSProperties) => {
     const on = f.id === floor?.id;
     return (
       <button key={f.id} type="button" aria-pressed={on} aria-label={t('in.floorAria', { i: i + 1, n: floorLabel(f, t) + ' ' + floorValue(f, t, lang) })}
-        onClick={() => { setFloorId(f.id); setProp(undefined); setHoverFloor(undefined); }} onMouseEnter={(e) => setHoverFloor(f.id, e.currentTarget)} onMouseLeave={() => setHoverFloor(undefined)} onFocus={(e) => setHoverFloor(f.id, e.currentTarget)} onBlur={() => setHoverFloor(undefined)}
+        onClick={() => { setFloorId(f.id); setProp(undefined); setHoverFloor(undefined); }} onPointerEnter={(e) => { if (e.pointerType === 'mouse') setHoverFloor(f.id, e.currentTarget); }} onPointerLeave={() => setHoverFloor(undefined)}
+        onFocus={(e) => { if (e.currentTarget.matches(':focus-visible')) setHoverFloor(f.id, e.currentTarget); }} onBlur={() => setHoverFloor(undefined)}
         style={{ ...btn, ...px, ...(on ? pressed : {}), boxShadow: 'none', display: 'flex', alignItems: 'center', gap: 6, minHeight: 24, padding: '0 8px', fontSize: 12, whiteSpace: 'nowrap', ...style }}>
         <i aria-hidden style={{ width: 8, height: 8, background: f.colour, outline: '1px solid #141A30', flex: 'none' }} />
         <b style={{ fontWeight: 600 }}>{floorLabel(f, t)}</b>
@@ -215,11 +222,12 @@ export function InteriorView(p: InteriorProps & { caps?: UCapabilities }) {
         {!phone && sessionId && p.onOpen && <button type="button" style={{ ...btn, marginLeft: 4, whiteSpace: 'nowrap' }} onClick={() => p.onOpen!(sessionId)}>{t('act.open')}</button>}
       </nav>
       {phone && sessionId && p.onOpen && <button type="button" style={{ ...btn, ...px, position: 'absolute', right: 12, top: 12, minHeight: 34, whiteSpace: 'nowrap', zIndex: 3 }} onClick={() => p.onOpen!(sessionId)}>{t('act.open')}</button>}
-      {/* Floor buttons: beside the stack (wide), or a row under the breadcrumb (narrow). Top floor first in reading order. */}
+      {/* Floor buttons: beside the stack (wide), or a row under the breadcrumb (narrow). Top floor first in reading order.
+          Above the room's invisible person and prop buttons (z 2), which covered a floor at 320 px. */}
       {wide && geo && geo.labels.length === it.floors.length
-        ? it.floors.map((f, i) => floorBtn(f, i, { position: 'absolute', left: Math.round(geo.labels[i][0]), top: Math.round(geo.labels[i][1] - 12), zIndex: 2 }))
+        ? it.floors.map((f, i) => floorBtn(f, i, { position: 'absolute', left: Math.round(geo.labels[i][0]), top: Math.round(geo.labels[i][1] - 12), zIndex: 3 }))
         : (
-          <div ref={chipsRef} role="group" aria-label={t('in.floors')} style={{ position: 'absolute', left: 12, right: 12, top: 12 + navH + 8, display: 'flex', flexWrap: 'wrap', gap: 4, zIndex: 2 }}>
+          <div ref={chipsRef} role="group" aria-label={t('in.floors')} style={{ position: 'absolute', left: 12, right: 12, top: 12 + navH + 8, display: 'flex', flexWrap: 'wrap', gap: 4, zIndex: 3 }}>
             {it.floors.map((f, i) => ({ f, i })).reverse().map(({ f, i }) => floorBtn(f, i, {}))}
           </div>
         )}
@@ -265,7 +273,7 @@ export function InteriorView(p: InteriorProps & { caps?: UCapabilities }) {
       })()}
       {/* Who is on this floor: a button per agent (keyboard and screen readers reach every person here). */}
       {floor && (
-        <section aria-label={t('in.here')} style={{ ...px, position: 'absolute', right: 12, bottom: 12, maxWidth: 280, maxHeight: '40%', overflowY: 'auto', padding: '6px 8px', fontSize: 12, zIndex: 2 }}>
+        <section aria-label={t('in.here')} style={{ ...px, position: 'absolute', right: 12, bottom: 12, maxWidth: 280, maxHeight: '40%', overflowY: 'auto', padding: '6px 8px', fontSize: 12, zIndex: 3 }}>
           <b style={{ display: 'block', marginBottom: 2 }}>{t('in.here')}</b>
           {floor.people.length === 0 && <div style={{ color: C.muted }}>{floor.act ? t('in.nobody') : t('in.still')}</div>}
           {floor.people.map((a) => {

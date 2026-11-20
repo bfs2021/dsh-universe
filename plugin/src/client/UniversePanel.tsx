@@ -4,12 +4,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CITY_SOURCES, cityOfSource, type NeighbourId, type NeighbourSummary, type SourceId } from '@dsh-universe/adapter-dsh';
 import { Region, SIGN, type CityId } from './Region.tsx';
 import { hostDark } from './prefs.ts';
-import { LAYER_OF_TODAY, buildingOf, historyWindow, nextIndex, rally, seenKey, idxAt, type LayerId, type Today } from '@dsh-universe/model';
+import { LAYER_OF_TODAY, buildingOf, dayStart, historyWindow, nextIndex, rally, seenKey, idxAt, type LayerId, type Today } from '@dsh-universe/model';
 import { CityPanel, TOUR_BUILDING, type CityTarget } from './CityPanel.tsx';
 import { LIST_CSS, btn, group, groupBtn, px } from './chrome.ts';
 import { citiesFound, citiesShown, neighbourOn, offSources, readPrefs, writePrefs, type Prefs } from './prefs.ts';
 import { usePopover } from './popover.ts';
-import { useFeed, useNow, useObservable } from './hooks.ts';
+import { LIST_TICK_MS, useFeed, useNow, useObservable } from './hooks.ts';
 import { clock } from './format.ts';
 import { unlockSound, useTime } from './time.ts';
 import { QUIET, levelsOf, useAmbience, type CityLevels } from './sound.ts';
@@ -114,7 +114,10 @@ export function UniversePanel({ env }: { env: Env }) {
     }
   };
   const drafts = useObservable(env.drafts ?? NO_DRAFTS);
-  const live = useNow(env.now);
+  // The clock: once a second in the city (its plates and today bar follow it), every few seconds under the list (its
+  // durations), never while the page is hidden (hooks.ts).
+  const inCity = prefs.view === 'city';
+  const live = useNow(env.now, inCity ? 1000 : LIST_TICK_MS);
   // The moment shown: live, looked back to on the timeline, or replayed (model/timeline).
   const time = useTime(live, feed.phase === 'ready' ? feed.store : undefined);
   const T = time.T;
@@ -134,7 +137,10 @@ export function UniversePanel({ env }: { env: Env }) {
   const view = useMemo(() => {
     if (feed.phase !== 'ready' || !feed.platform) return undefined;
     const store = feed.store;
-    const today = todayAt(store, T, CITY, env.seen, drafts);
+    // "Today" counts from the start of the host's day: sessions carried over from yesterday keep their buildings, but
+    // what they did before midnight is not counted again.
+    const from = dayStart(T, feed.utcOffset);
+    const today = todayAt(store, T, CITY, env.seen, drafts, from);
     return {
       head: time.mode === 'live' ? headline(store, T, t) : pastHead(store, T, t, lang),
       today,
@@ -142,23 +148,24 @@ export function UniversePanel({ env }: { env: Env }) {
       // adjacent cities' sessions running, failed calls and tokens are added, labelled as local.
       buttons: ((b) => (active === 'dsh' && time.mode === 'live' ? withLocal(b, today, shownSums, t, lang) : b))(
         todayButtons(today, T, t, lang, feed.platform.caps).filter((b) => active === 'dsh' || b.cat !== 'sched' || feed.platform!.caps.schedules)),
-      sections: sections(store, T, t, lang, titles, env.seen, drafts),
-      places: places(store, T, t, lang, feed.platform.caps),
+      // The list's rows and places only under the list (in the city they are worked out when a card asks for one).
+      sections: inCity ? undefined : sections(store, T, t, lang, titles, env.seen, drafts, from),
+      places: inCity ? [] : places(store, T, t, lang, feed.platform.caps),
       schedules: feed.platform.caps.schedules ? store.schedules().slice().sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity)) : null,
       plugins: store.inventory().plugins,
       empty: !store.agents().some((s) => s.agent.startedAt <= T),
     };
     // feed.version changes whenever the store does (the city too: each city has its own feed and count).
-  }, [feed.version, feed.phase, T, titles, lang, drafts, time.mode, active, shownSums]);
+  }, [feed.version, feed.phase, T, titles, lang, drafts, time.mode, active, shownSums, inCity]);
   // The DSH city's sessions running, for its chip while another city is shown.
-  const dshRunning = useMemo(() => (dsh.phase === 'ready' ? todayAt(dsh.store, live, CITY).running : undefined), [dsh.version, dsh.phase, live]);
+  const dshRunning = useMemo(() => (active !== 'dsh' && dsh.phase === 'ready' ? todayAt(dsh.store, live, CITY, undefined, undefined, dayStart(live, dsh.utcOffset)).running : undefined), [dsh.version, dsh.phase, live, active]);
   // The ambience: the city in view, or in the cities-around view all of them from a distance (the focused card's
   // city brought forward). Each city's sound follows its own activity.
   const [regionFocus, setRegionFocus] = useState<CityId | undefined>();
   const levels = useMemo(() => {
     const out: Record<string, CityLevels> = {};
     if (view && feed.phase === 'ready') out[active] = levelsOf(feed.store, live, view.today.running, view.today.need);
-    if (active !== 'dsh' && dsh.phase === 'ready') { const d = todayAt(dsh.store, live, CITY); out.dsh = levelsOf(dsh.store, live, d.running, d.need); }
+    if (active !== 'dsh' && dsh.phase === 'ready') { const d = todayAt(dsh.store, live, CITY, undefined, undefined, dayStart(live, dsh.utcOffset)); out.dsh = levelsOf(dsh.store, live, d.running, d.need); }
     for (const x of shownSums) if (x.id !== active) out[x.id] = { ...QUIET, running: x.running, errors: Math.min(x.errors, 5), traffic: x.running * 4 };
     return out;
   }, [feed.version, dsh.version, Math.floor(live / 5000), active, shownSums]);
@@ -211,7 +218,7 @@ export function UniversePanel({ env }: { env: Env }) {
     const s = feed.store.agent(row.id);
     if (s && env.seen.mark(seenKey(CITY, row.sessionId, idxAt(s, T)))) setSeenTick((x) => x + 1);
   };
-  const rowFor = (sid: string) => view.sections.flatMap((x) => x.rows).find((r) => r.sessionId === sid);
+  const rowFor = (sid: string) => (view.sections ?? sections(feed.store, T, t, lang, titles, env.seen, drafts, dayStart(T, feed.utcOffset))).flatMap((x) => x.rows).find((r) => r.sessionId === sid);
   const open = active === 'dsh' && env.openSession && feed.platform?.caps.actions.openSession
     ? (row: Row) => { if (row.review) markSeen(row); env.openSession!(row.sessionId); }
     : undefined;
@@ -320,7 +327,7 @@ export function UniversePanel({ env }: { env: Env }) {
         {/* The toolbar sits above the city and the notes under it: the notes hang from its bottom edge (never at a fixed
             height, where a toolbar wrapped onto two lines went under them and its buttons could not be pressed). */}
         <div style={{ position: 'relative', zIndex: 11 }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap-reverse', gap: 8, alignItems: 'flex-end', padding: '10px 12px 4px' }}>
+          <div data-dshu-head="" style={{ display: 'flex', flexWrap: 'wrap-reverse', gap: 8, alignItems: 'flex-end', padding: '10px 12px 4px' }}>
             <p style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }} aria-live="polite">{view.empty ? t('h.empty') : view.head}</p>
             <div style={{ flex: '1 1 300px', minWidth: 0 }}>{regionOpen ? <p style={{ ...S.head, margin: '0 0 6px' }}>{t('nb.region')}</p> : <TodayBar buttons={view.buttons} t={t} onPress={press} oneRow active={activeCat} />}</div>
             <div style={{ marginLeft: 'auto', paddingBottom: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>{nbControls}{toggle}</div>
@@ -343,7 +350,7 @@ export function UniversePanel({ env }: { env: Env }) {
             onEnter={go} onClose={() => { setRegion(false); setRegionFocus(undefined); }} onFocusCity={setRegionFocus} />
         ) : <CityPanel key={active} onZoomOutFar={enabled.length > 0 ? () => setRegion(true) : undefined} beside={chips || undefined}
           hideLayers={active === 'dsh' ? undefined : [...(feed.platform?.caps.schedules ? [] : ['scheduled' as const]), ...(feed.platform?.caps.tokens ? [] : ['tokens' as const])]}
-          t={t} lang={lang} T={T} store={feed.store} placement={feed.placement ?? EMPTY_PLACEMENT} titles={titles} version={feed.version}
+          t={t} lang={lang} T={T} utcOffset={feed.utcOffset} store={feed.store} placement={feed.placement ?? EMPTY_PLACEMENT} titles={titles} version={feed.version}
           prefs={prefs} setPrefs={setPrefs} target={target} layer={layer} setLayer={setLayer} seen={env.seen} drafts={drafts}
           live={live} mode={time.mode} onScrub={time.scrub} onReplay={time.replay} onFollow={(id) => setTarget({ id: 'agent:' + id, nonce: Date.now() })} onOpen={open ? (sid) => { const r = rowFor(sid); if (r) open(r); else env.openSession?.(sid); } : undefined} caps={feed.platform?.caps} />}
         {!prefs.toured && active === 'dsh' && !regionOpen && <Tour t={t} root={rootRef} step={Math.min(tourAt, TOUR.length - 1)} onStep={(n) => {
@@ -377,8 +384,9 @@ export function UniversePanel({ env }: { env: Env }) {
       {feed.backfill === 'partial' && <p style={S.note}>{t('e.partial')}</p>}
       {feed.full && <p style={S.note}>{t('e.full')}</p>}
       <TodayBar buttons={view.buttons} t={t} onPress={press} chrome />
-      <ListView t={t} lang={lang} T={T} sections={view.sections} places={view.places} schedules={view.schedules}
-        plugins={view.plugins} days={historyWindow(feed.history, feed.store, T, undefined, active !== 'dsh')} focus={focus} onOpen={open} onSeen={markSeen} />
+      <ListView t={t} lang={lang} T={T} sections={view.sections ?? []} places={view.places} schedules={view.schedules}
+        plugins={view.plugins} days={historyWindow(feed.history, feed.store, T, undefined, active !== 'dsh')} focus={focus} onOpen={open} onSeen={markSeen}
+        onEnter={(id) => { setTarget({ id, nonce: Date.now(), enter: true }); setPrefs({ ...prefs, view: 'city' }); }} />
     </div>
   );
 }
